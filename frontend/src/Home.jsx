@@ -1,31 +1,45 @@
 import { useEffect, useState } from 'react'
+//import { useEffect, useState } from 'react'
+import ReceiptUpload from './ReceiptUpload'
 
-export default function Home({ username, onNavigate }) {
+const API = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000'
+
+  
+  export default function Home({ username, onNavigate }) {
   const [stats, setStats] = useState({ groups: 0, members: 0, expenses: 0 })
   const [recent, setRecent] = useState([])
+  const [showReceiptUpload, setShowReceiptUpload] = useState(false)
 
   useEffect(() => {
     let active = true
     ;(async () => {
       try {
-        const gs = await fetch('http://localhost:5000/api/groups/list?user=' + encodeURIComponent(username))
+        const gs = await fetch(`${API}/api/groups/list?user=${encodeURIComponent(username)}`)
         const gl = await gs.json()
         if (!active) return
         const gCount = Array.isArray(gl) ? gl.length : 0
         setStats(s => ({ ...s, groups: gCount }))
       } catch {}
       try {
-        const rs = await fetch('http://localhost:5000/api/expenses/recent?user=' + encodeURIComponent(username))
+        const rs = await fetch(`${API}/api/expenses/recent?user=${encodeURIComponent(username)}`)
         const rl = await rs.json()
         if (!active) return
         setRecent(Array.isArray(rl) ? rl.slice(0,5) : [])
         const m = new Set()
         for (const e of Array.isArray(rl)?rl:[]) if (e.members) e.members.forEach(x=>m.add(x))
         setStats(s => ({ ...s, members: m.size || s.members }))
-      } catch {}
+      } catch (e) {
+        console.error('Recent expenses error:', e)}
     })()
     return () => { active = false }
   }, [username])
+
+  const handleReceiptData = (data) => {
+    // Store extracted data in session storage or pass to GroupDetails
+    sessionStorage.setItem('receiptData', JSON.stringify(data))
+    setShowReceiptUpload(false)
+    onNavigate('addExpense')
+  }
 
   const currency = v => Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(v||0)
 
@@ -80,13 +94,20 @@ export default function Home({ username, onNavigate }) {
           <div className="actions-grid">
             <button className="action" onClick={()=>onNavigate('groups')}>Create Group</button>
             <button className="action" onClick={()=>onNavigate('groups')}>Add Member</button>
-            <button className="action">Add Expense</button>
-            <button className="action">Upload Receipt</button>
+            <button className="action" onClick={()=>onNavigate('addExpense')}>Add Expense</button>
+            <button className="action" onClick={()=>setShowReceiptUpload(true)}>Upload Receipt</button>
             <button className="action">Settle Up</button>
             <button className="action">View Reports</button>
           </div>
         </div>
       </div>
+
+       {showReceiptUpload && (
+        <ReceiptUpload 
+          onExtractData={handleReceiptData}
+          onClose={() => setShowReceiptUpload(false)}
+        />
+      )}
     </div>
   )
 }
