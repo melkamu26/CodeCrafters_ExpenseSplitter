@@ -1,12 +1,21 @@
 import { useEffect, useState } from 'react'
-//import { useEffect, useState } from 'react'
 import ReceiptUpload from './ReceiptUpload'
 
 const API = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000'
 
-  
-  export default function Home({ username, onNavigate }) {
-  const [stats, setStats] = useState({ groups: 0, members: 0, expenses: 0 })
+const fmtUSD = v =>
+  Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Math.abs(v || 0))
+
+const fmtMDY = s => {
+  if (!s) return ''
+  // handle ISO "YYYY-MM-DD" or Date
+  const d = typeof s === 'string' ? new Date(s) : new Date(s)
+  if (isNaN(d)) return s
+  return d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
+}
+
+export default function Home({ username, onNavigate }) {
+  const [stats, setStats] = useState({ groups: 0, members: 0 })
   const [recent, setRecent] = useState([])
   const [showReceiptUpload, setShowReceiptUpload] = useState(false)
 
@@ -17,34 +26,33 @@ const API = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000'
         const gs = await fetch(`${API}/api/groups/list?user=${encodeURIComponent(username)}`)
         const gl = await gs.json()
         if (!active) return
-        const gCount = Array.isArray(gl) ? gl.length : 0
-        setStats(s => ({ ...s, groups: gCount }))
+        const list = Array.isArray(gl) ? gl : []
+        const gCount = list.length
+        const members = new Set()
+        list.forEach(g => g.members?.forEach(m => members.add(m)))
+        setStats({ groups: gCount, members: members.size })
       } catch {}
+
       try {
         const rs = await fetch(`${API}/api/expenses/recent?user=${encodeURIComponent(username)}`)
         const rl = await rs.json()
         if (!active) return
-        setRecent(Array.isArray(rl) ? rl.slice(0,5) : [])
-        const m = new Set()
-        for (const e of Array.isArray(rl)?rl:[]) if (e.members) e.members.forEach(x=>m.add(x))
-        setStats(s => ({ ...s, members: m.size || s.members }))
-      } catch (e) {
-        console.error('Recent expenses error:', e)}
+        setRecent(Array.isArray(rl) ? rl.slice(0, 5) : [])
+      } catch {}
     })()
     return () => { active = false }
   }, [username])
 
   const handleReceiptData = (data) => {
-    // Store extracted data in session storage or pass to GroupDetails
+    // save for AddExpense to prefill
     sessionStorage.setItem('receiptData', JSON.stringify(data))
     setShowReceiptUpload(false)
     onNavigate('addExpense')
   }
 
-  const currency = v => Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(v||0)
-
   return (
-    <div className="page">
+    <div className="page" style={{ gap: 14 }}>
+      {/* Header */}
       <div className="page-header">
         <div>
           <h1 className="title">Welcome, {username}</h1>
@@ -52,7 +60,8 @@ const API = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000'
         </div>
       </div>
 
-      <div className="grid-3">
+      {/* KPIs */}
+      <div className="grid-3" style={{ alignItems: 'stretch' }}>
         <div className="kpi">
           <div className="kpi-label">Groups</div>
           <div className="kpi-value">{stats.groups}</div>
@@ -63,25 +72,32 @@ const API = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000'
         </div>
         <div className="kpi">
           <div className="kpi-label">Recent Spend</div>
-          <div className="kpi-value">{currency(recent.reduce((a,b)=>a+Math.abs(b.amount||0),0))}</div>
+          <div className="kpi-value">
+            {fmtUSD(recent.reduce((a, b) => a + Math.abs(b.amount || 0), 0))}
+          </div>
         </div>
       </div>
 
-      <div className="grid-2">
-        <div className="panel">
-          <div className="panel-title">Recent Expenses</div>
+      {/* Main Row */}
+      <div className="grid-2" style={{ alignItems: 'start' }}>
+        {/* Recent Expenses */}
+        <div className="panel" style={{ minHeight: 420, display: 'flex', flexDirection: 'column' }}>
+          <div className="panel-title" style={{ marginBottom: 4 }}>Recent Expenses</div>
+
           {recent.length === 0 ? (
-            <div className="empty">No recent expenses</div>
+            <div className="empty" style={{ marginTop: 6 }}>No recent expenses</div>
           ) : (
-            <ul className="list">
-              {recent.map((e,i)=>(
+            <ul className="list" style={{ overflowY: 'auto', maxHeight: 360 }}>
+              {recent.map((e, i) => (
                 <li key={i} className="list-row">
                   <div className="list-main">
                     <div className="list-title">{e.title || 'Expense'}</div>
-                    <div className="list-sub">{(e.group)||'Personal'} • {new Date(e.date||Date.now()).toLocaleDateString()}</div>
+                    <div className="list-sub">
+                      {(e.group) || 'Personal'} • {fmtMDY(e.date)}
+                    </div>
                   </div>
-                  <div className={'amount ' + ((e.type==='credit'||(e.amount||0)<0)?'pos':'neg')}>
-                    {currency(Math.abs(e.amount||0))}
+                  <div className={'amount ' + ((e.amount || 0) < 0 ? 'pos' : 'neg')}>
+                    {fmtUSD(e.amount)}
                   </div>
                 </li>
               ))}
@@ -89,21 +105,23 @@ const API = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000'
           )}
         </div>
 
-        <div className="panel">
-          <div className="panel-title">Quick Actions</div>
-          <div className="actions-grid">
-            <button className="action" onClick={()=>onNavigate('groups')}>Create Group</button>
-            <button className="action" onClick={()=>onNavigate('groups')}>Add Member</button>
-            <button className="action" onClick={()=>onNavigate('addExpense')}>Add Expense</button>
-            <button className="action" onClick={()=>setShowReceiptUpload(true)}>Upload Receipt</button>
-            <button className="action">Settle Up</button>
-            <button className="action">View Reports</button>
+        {/* Quick Actions */}
+        <div className="panel" style={{ minHeight: 420, display: 'flex', flexDirection: 'column' }}>
+          <div className="panel-title" style={{ marginBottom: 0 }}>Quick Actions</div>
+          <div className="actions-grid" style={{ marginTop: 0, flex: 1 }}>
+            <button className="action" onClick={() => onNavigate('groups')}>Create Group</button>
+            <button className="action" onClick={() => onNavigate('groups')}>Add Member</button>
+            <button className="action" onClick={() => onNavigate('addExpense')}>Add Expense</button>
+            <button className="action" onClick={() => setShowReceiptUpload(true)}>Upload Receipt</button>
+            <button className="action" onClick={() => onNavigate('settle')}>Settle Up</button>
+            <button className="action" onClick={() => onNavigate('analytics')}>View Reports</button>
           </div>
         </div>
       </div>
 
-       {showReceiptUpload && (
-        <ReceiptUpload 
+      {/* Receipt Modal */}
+      {showReceiptUpload && (
+        <ReceiptUpload
           onExtractData={handleReceiptData}
           onClose={() => setShowReceiptUpload(false)}
         />

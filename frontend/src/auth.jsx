@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { LogIn, UserPlus, Wallet } from 'lucide-react'
 
+const API = import.meta.env.VITE_API_BASE //#endregion|| 'http://127.0.0.1:5000'
+
 export default function Auth({ onLoginSuccess }) {
   const [authMode, setAuthMode] = useState(null)
   const [username, setUsername] = useState('')
@@ -19,7 +21,7 @@ export default function Auth({ onLoginSuccess }) {
     }
     setLoading(true)
     try {
-      const response = await fetch('http://localhost:5000/api/users/register', {
+      const response = await fetch(`${API}/api/users/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -46,7 +48,7 @@ export default function Auth({ onLoginSuccess }) {
     }
     setLoading(true)
     try {
-      const response = await fetch('http://localhost:5000/api/users/login', {
+      const response = await fetch(`${API}/api/users/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
