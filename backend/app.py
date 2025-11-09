@@ -17,7 +17,17 @@ CORS(app)
 
 # Initialize Vision client
 def get_vision_client():
-    key_path = os.getenv('GOOGLE_VISION_KEY_PATH', './google-vision-key.json')
+    key_json = os.getenv("GOOGLE_VISION_CREDENTIALS_JSON")
+    if key_json:
+        try:
+            info = json.loads(key_json)
+            return vision.ImageAnnotatorClient.from_service_account_info(info)
+        except Exception as e:
+            # If malformed JSON, log and continue to file fallback
+            print("Error loading Vision credentials from env:", e)
+
+    # 2) Fallback: use a file path (works locally)
+    key_path = os.getenv("GOOGLE_VISION_KEY_PATH", "./google-vision-key.json")
     if not os.path.exists(key_path):
         print(f"Key file not found at: {key_path}")
         print(f"Current directory: {os.getcwd()}")
