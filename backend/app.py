@@ -536,6 +536,75 @@ def extract_line_items(text):
             unique_items.append(item)
     
     return unique_items[:20]
+
+#=================Analytics Endpoint====================
+
+@app.route('/api/analytics/overview', methods=['GET'])
+def analytics_overview():
+    user = (request.args.get('user') or '').strip()
+    if not user:
+        return jsonify({'error': 'Username required'}), 400
+    try:
+        conn = get_connection(); cur = conn.cursor()
+
+        # total spend across groups the user is in
+        cur.execute("""
+            SELECT COALESCE(SUM(e.amount),0)
+            FROM expenses e
+            JOIN `groups` g ON g.id = e.group_id
+            JOIN group_members gm ON gm.group_id = g.id
+            WHERE gm.username = %s
+        """, (user,))
+        total_spend = float(cur.fetchone()[0] or 0)
+
+        # spend by group
+        cur.execute("""
+            SELECT g.name, COALESCE(SUM(e.amount),0) AS total
+            FROM expenses e
+            JOIN `groups` g ON g.id = e.group_id
+            JOIN group_members gm ON gm.group_id = g.id
+            WHERE gm.username = %s
+            GROUP BY g.name
+            ORDER BY total DESC
+        """, (user,))
+        by_group = [{'group': r[0], 'total': float(r[1])} for r in cur.fetchall()]
+
+        # spend by payer (who paid)
+        cur.execute("""
+            SELECT e.paid_by, COALESCE(SUM(e.amount),0) AS total
+            FROM expenses e
+            JOIN `groups` g ON g.id = e.group_id
+            JOIN group_members gm ON gm.group_id = g.id
+            WHERE gm.username = %s
+            GROUP BY e.paid_by
+            ORDER BY total DESC
+        """, (user,))
+        by_payer = [{'payer': r[0], 'total': float(r[1])} for r in cur.fetchall()]
+
+        # monthly spend (last 6 months)
+        cur.execute("""
+            SELECT DATE_FORMAT(e.date, '%%Y-%%m') AS ym, COALESCE(SUM(e.amount),0) AS total
+            FROM expenses e
+            JOIN `groups` g ON g.id = e.group_id
+            JOIN group_members gm ON gm.group_id = g.id
+            WHERE gm.username = %s
+            GROUP BY ym
+            ORDER BY ym DESC
+            LIMIT 6
+        """, (user,))
+        monthly_raw = [{'month': r[0], 'total': float(r[1])} for r in cur.fetchall()]
+        monthly = list(reversed(monthly_raw))  # oldest -> newest for chart
+
+        cur.close(); conn.close()
+        return jsonify({
+            'totals': {'totalSpend': total_spend},
+            'byGroup': by_group,
+            'byPayer': by_payer,
+            'monthly': monthly
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
     # ==================== HEALTH CHECK ====================
 
 @app.route('/api/health', methods=['GET'])
