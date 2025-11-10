@@ -176,3 +176,26 @@ select{-webkit-appearance:none;-moz-appearance:none;appearance:none}
   .logout-btn{margin-left:auto}
   .grid-3,.grid-2{grid-template-columns:1fr}
 }
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Smooth scrollbar for chat */
+.chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 3px;
+}
+
+.chat-messages::-webkit-scrollbar-track {
+  background: transparent;
+}

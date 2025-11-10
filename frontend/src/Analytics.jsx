@@ -68,8 +68,11 @@ export default function Analytics({ username }) {
       setLoading(true); setErr('')
       try {
         const r = await fetch(`${API}/api/analytics/overview?user=${encodeURIComponent(username)}`)
+        if (!r.ok) {
+            const text = await r.text()
+            throw new Error(`Failed to load analytics: ${text.substring(0, 100)}`)
+        }
         const d = await r.json()
-        if (!r.ok) throw new Error(d.error || 'Failed to load analytics')
         if (!live) return
         setData(d)
       } catch (e) {

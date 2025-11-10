@@ -1,14 +1,51 @@
 // Dashboard.jsx
-import { useState } from 'react'
+//import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Home from './Home'
 import Groups from './Groups'
 import GroupDetails from './GroupDetails'
 import Analytics from './Analytics'
 import ReceiptUpload from './ReceiptUpload'
+import FinancialChatbot from './FinancialChatbot'
+
+const API = import.meta.env.VITE_API_BASE || 'http://localhost:5000'
 
 export default function Dashboard({ username, onLogout }) {
   const [tab, setTab] = useState('home')
   const [selectedGroup, setSelectedGroup] = useState(null)
+  const [groups, setGroups] = useState([])
+  const [expenses, setExpenses] = useState([])
+
+   useEffect(() => {
+    loadGroups()
+    loadRecentExpenses()
+  }, [username])
+
+  const loadGroups = async () => {
+    try {
+      const r = await fetch(`${API}/api/groups/list?user=${encodeURIComponent(username)}`)
+      const d = await r.json()
+      setGroups(Array.isArray(d) ? d : [])
+    } catch (err) {
+      console.error('Failed to load groups:', err)
+    }
+  }
+
+  const loadRecentExpenses = async () => {
+    try {
+      const r = await fetch(`${API}/api/expenses/recent?user=${encodeURIComponent(username)}`)
+      const d = await r.json()
+      setExpenses(Array.isArray(d) ? d : [])
+    } catch (err) {
+      console.error('Failed to load expenses:', err)
+    }
+  }
+
+  const handleExpenseAdded = () => {
+    // Refresh data when chatbot adds an expense
+    loadGroups()
+    loadRecentExpenses()
+  }
 
   const goAddExpense = (g = null) => {
     setSelectedGroup(g || null)
@@ -72,6 +109,14 @@ export default function Dashboard({ username, onLogout }) {
             </div>
           </div>
         )}
+
+        {/* AI Chatbot - Always visible as floating button */}
+        <FinancialChatbot
+          username={username}
+          groups={groups}
+          expenses={expenses}
+          onExpenseAdded={handleExpenseAdded}
+        />
       </main>
     </div>
   )
