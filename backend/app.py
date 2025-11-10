@@ -276,11 +276,12 @@ def create_expense():
             return jsonify({'error': 'Group not found'}), 404
         
         # Verify user (paid_by) exists
+        print(f"Paid by: {paid_by}")
         cursor.execute("SELECT username FROM users WHERE username = %s", (paid_by,))
         if not cursor.fetchone():
             cursor.close()
             conn.close()
-            return jsonify({'error': 'User not found'}), 404
+            return jsonify({'error': f'User {paid_by} not found' }), 404
         
         # Create expense
         from datetime import datetime
@@ -292,20 +293,20 @@ def create_expense():
         ''', (expense_id, group_id, amount, title, notes, date, current_time, paid_by))
         
         # Get all group members for splitting
-        cursor.execute('''
-            SELECT username FROM group_members WHERE group_id = %s
-        ''', (group_id,))
-        
+        cursor.execute("SELECT username FROM group_members WHERE group_id = %s", (group_id,))
         members = [row[0] for row in cursor.fetchall()]
-        
-        # Create split (equal split for now)
+
+        # Equal split among ALL members (including payer) for fairness,
+        # but only OTHERS owe the payer, so don't create a row for the payer.
         if split_type == 'equal' and members:
-            split_amount = amount / len(members)
+            share = amount / len(members)               # everyone’s fair share
             for member in members:
-                cursor.execute('''
+                if member == paid_by:                   # payer does NOT owe
+                    continue
+                cursor.execute("""
                     INSERT INTO expense_split (expense_id, username, split_amount)
                     VALUES (%s, %s, %s)
-                ''', (expense_id, member, split_amount))
+                """, (expense_id, member, share))
         
         conn.commit()
         cursor.close()
@@ -612,6 +613,156 @@ def analytics_overview():
             'byPayer': by_payer,
             'monthly': monthly
         }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ==================== PAYMENT ENDPOINTS ====================
+
+@app.route('/api/payments/pending', methods=['GET'])
+def get_pending_payments():
+    """Get all pending payments for a user"""
+    username = request.args.get('user')
+    
+    if not username:
+        return jsonify({'error': 'Username required'}), 400
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        
+        # Get all unpaid splits for the user
+        cursor.execute("""
+            SELECT 
+                e.id as expense_id,
+                e.category as title,
+                e.date,
+                e.paid_by,
+                e.amount as total_amount,
+                es.split_amount as amount_owed,
+                g.name as group_name,
+                g.id as group_id,
+                CASE 
+                    WHEN p.id IS NOT NULL THEN 'paid'
+                    ELSE 'pending'
+                END as payment_status
+            FROM expense_split es
+            JOIN expenses e ON es.expense_id = e.id
+            JOIN `groups` g ON e.group_id = g.id
+            LEFT JOIN payments p ON es.expense_id = p.expense_id AND es.username = p.username
+            WHERE es.username = %s
+                AND e.paid_by <> %s
+            ORDER BY e.date DESC
+        """, (username,username))
+        
+        all_payments = cursor.fetchall()
+        
+        # Separate pending and paid
+        pending = [p for p in all_payments if p['payment_status'] == 'pending']
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            'pending': pending,
+            'total_owed': sum(p['amount_owed'] for p in pending)
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/payments/pay', methods=['POST'])
+def make_payment():
+    """Mark a payment as paid"""
+    data = request.json
+    expense_id = data.get('expenseId')
+    username = data.get('username')
+    amount = data.get('amount')
+    
+    if not all([expense_id, username, amount]):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Check if already paid
+        cursor.execute("""
+            SELECT id FROM payments 
+            WHERE expense_id = %s AND username = %s
+        """, (expense_id, username))
+        
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify({'error': 'Already paid'}), 400
+        
+        # Record payment
+        cursor.execute("""
+            INSERT INTO payments (expense_id, username, amount, payment_method)
+            VALUES (%s, %s, %s, 'manual')
+        """, (expense_id, username, amount))
+        
+        # Check if all members have paid
+        cursor.execute("""
+            SELECT COUNT(DISTINCT es.username) as total_members,
+                   COUNT(DISTINCT p.username) as paid_members
+            FROM expense_split es
+            LEFT JOIN payments p ON es.expense_id = p.expense_id AND es.username = p.username
+            WHERE es.expense_id = %s
+        """, (expense_id,))
+        
+        result = cursor.fetchone()
+        if result and result[0] == result[1]:
+            # All members paid - update expense status
+            cursor.execute("""
+                UPDATE expenses SET status = 'paid' WHERE id = %s
+            """, (expense_id,))
+        else:
+            # Partial payment
+            cursor.execute("""
+                UPDATE expenses SET status = 'partial' WHERE id = %s AND status = 'pending'
+            """, (expense_id,))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({'message': 'Payment recorded'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/payments/history', methods=['GET'])
+def payment_history():
+    """Get payment history for a user"""
+    username = request.args.get('user')
+    
+    if not username:
+        return jsonify({'error': 'Username required'}), 400
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        
+        cursor.execute("""
+            SELECT 
+                p.id,
+                p.amount,
+                p.paid_at,
+                p.payment_method,
+                e.category as expense_title,
+                g.name as group_name
+            FROM payments p
+            JOIN expenses e ON p.expense_id = e.id
+            JOIN `groups` g ON e.group_id = g.id
+            WHERE p.username = %s
+            ORDER BY p.paid_at DESC
+            LIMIT 20
+        """, (username,))
+        
+        payments = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        return jsonify(payments), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

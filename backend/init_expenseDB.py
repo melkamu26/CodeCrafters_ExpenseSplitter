@@ -58,6 +58,34 @@ def create_tables():
         FOREIGN KEY (username) REFERENCES users(username)
             )
     ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        expense_id VARCHAR(36) NOT NULL,
+        username VARCHAR(80) NOT NULL,
+        amount FLOAT NOT NULL,
+        paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        payment_method VARCHAR(50) DEFAULT 'manual',
+        FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE CASCADE,
+        FOREIGN KEY (username) REFERENCES users(username),
+        UNIQUE KEY unique_payment (expense_id, username)
+                
+            )
+    ''')
+
+#Add status column to expenses table to track if fully paid
+    cursor.execute( '''
+        ALTER TABLE expenses 
+        ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending' 
+        COMMENT 'pending, partial, paid'
+    ''')
+
+    #Add index for faster queries
+    cursor.execute('''
+    CREATE INDEX IF NOT EXISTS idx_expense_status ON expenses(status);
+    CREATE INDEX IF NOT EXISTS idx_payment_expense ON payments(expense_id);
+    ''')
     
     conn.commit()
     cursor.close()
