@@ -7,6 +7,7 @@ import GroupDetails from './GroupDetails'
 import Analytics from './Analytics'
 import ReceiptUpload from './ReceiptUpload'
 import FinancialChatbot from './FinancialChatbot'
+import Payments from './Payments'
 
 const API = import.meta.env.VITE_API_BASE || 'http://localhost:5000'
 
@@ -65,6 +66,7 @@ export default function Dashboard({ username, onLogout }) {
           <button className={tab==='home'?'nav-btn active':'nav-btn'} onClick={()=>setTab('home')}>Home</button>
           <button className={tab==='groups'?'nav-btn active':'nav-btn'} onClick={()=>setTab('groups')}>Groups</button>
           <button className={tab==='addExpense'?'nav-btn active':'nav-btn'} onClick={()=>goAddExpense()}>Add Expenses</button>
+          <button className={tab==='payments'?'nav-btn active':'nav-btn'} onClick={()=>setTab('payments')}>Payments</button>
           <button className={tab==='analytics'?'nav-btn active':'nav-btn'} onClick={()=>setTab('analytics')}>Analytics</button>
           <button className={tab==='upload'?'nav-btn active':'nav-btn'} onClick={()=>setTab('upload')}>Upload Receipt</button>
         </nav>
@@ -95,6 +97,8 @@ export default function Dashboard({ username, onLogout }) {
             titleOverride="Add Expenses"
           />
         )}
+
+        {tab === 'payments' && <Payments username={username} />}
 
         {tab === 'analytics' && <Analytics username={username} />}
 
