@@ -113,7 +113,7 @@ export default function Home({ username, onNavigate }) {
             <button className="action" onClick={() => onNavigate('groups')}>Add Member</button>
             <button className="action" onClick={() => onNavigate('addExpense')}>Add Expense</button>
             <button className="action" onClick={() => setShowReceiptUpload(true)}>Upload Receipt</button>
-            <button className="action" onClick={() => onNavigate('settle')}>Settle Up</button>
+            <button className="action" onClick={() => onNavigate('settlements')}>Settle Up</button>
             <button className="action" onClick={() => onNavigate('analytics')}>View Reports</button>
           </div>
         </div>

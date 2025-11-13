@@ -1,5 +1,4 @@
 // Dashboard.jsx
-//import { useState } from 'react'
 import { useState, useEffect } from 'react'
 import Home from './Home'
 import Groups from './Groups'
@@ -8,8 +7,23 @@ import Analytics from './Analytics'
 import ReceiptUpload from './ReceiptUpload'
 import FinancialChatbot from './FinancialChatbot'
 import Payments from './Payments'
+import Summarization from './Summarization'
+import SettlementSuggestions from './SettlementSuggestions'
 
-const API = import.meta.env.VITE_API_BASE || 'http://localhost:5000'
+// icons
+import {
+  Home as HomeIcon,
+  Users,
+  PlusCircle,
+  Upload as UploadIcon,
+  Scale,
+  CreditCard,
+  Sparkles,
+  BarChart3,
+  LogOut
+} from 'lucide-react'
+
+const API = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5050'
 
 export default function Dashboard({ username, onLogout }) {
   const [tab, setTab] = useState('home')
@@ -17,7 +31,7 @@ export default function Dashboard({ username, onLogout }) {
   const [groups, setGroups] = useState([])
   const [expenses, setExpenses] = useState([])
 
-   useEffect(() => {
+  useEffect(() => {
     loadGroups()
     loadRecentExpenses()
   }, [username])
@@ -43,7 +57,6 @@ export default function Dashboard({ username, onLogout }) {
   }
 
   const handleExpenseAdded = () => {
-    // Refresh data when chatbot adds an expense
     loadGroups()
     loadRecentExpenses()
   }
@@ -55,22 +68,63 @@ export default function Dashboard({ username, onLogout }) {
 
   const handleExtracted = (data) => {
     try { sessionStorage.setItem('receiptData', JSON.stringify(data)) } catch {}
-    goAddExpense()  // jump to Add Expense after OCR
+    goAddExpense()
   }
+
+  const NavButton = ({ id, icon: Icon, children, onClick }) => (
+    <button
+      className={tab === id ? 'nav-btn active nav-btn-icon' : 'nav-btn nav-btn-icon'}
+      onClick={onClick}
+    >
+      <Icon size={18} className="nav-ico" />
+      <span>{children}</span>
+    </button>
+  )
 
   return (
     <div className="dash-wrap">
       <aside className="dash-sidebar">
         <div className="dash-brand">Expense Splitter</div>
-        <nav className="dash-nav">
-          <button className={tab==='home'?'nav-btn active':'nav-btn'} onClick={()=>setTab('home')}>Home</button>
-          <button className={tab==='groups'?'nav-btn active':'nav-btn'} onClick={()=>setTab('groups')}>Groups</button>
-          <button className={tab==='addExpense'?'nav-btn active':'nav-btn'} onClick={()=>goAddExpense()}>Add Expenses</button>
-          <button className={tab==='payments'?'nav-btn active':'nav-btn'} onClick={()=>setTab('payments')}>Payments</button>
-          <button className={tab==='analytics'?'nav-btn active':'nav-btn'} onClick={()=>setTab('analytics')}>Analytics</button>
-          <button className={tab==='upload'?'nav-btn active':'nav-btn'} onClick={()=>setTab('upload')}>Upload Receipt</button>
-        </nav>
-        <button className="logout-btn" onClick={onLogout}>Logout</button>
+
+        {/* Record */}
+        <div className="dash-section">
+          <div className="dash-section-label">Record</div>
+          <nav className="dash-nav">
+            <NavButton id="home" icon={HomeIcon} onClick={() => setTab('home')}> Home</NavButton>
+            <NavButton id="groups" icon={Users} onClick={() => setTab('groups')}> Groups</NavButton>
+            <NavButton id="addExpense" icon={PlusCircle} onClick={() => goAddExpense()}> Add Expense
+            </NavButton>
+            <NavButton id="upload" icon={UploadIcon} onClick={() => setTab('upload')}> Upload Receipt
+            </NavButton>
+          </nav>
+        </div>
+
+        {/* Settle */}
+        <div className="dash-section">
+          <div className="dash-section-label">Settle</div>
+          <nav className="dash-nav">
+            <NavButton id="settlements" icon={Scale} onClick={() => setTab('settlements')}> Settlements
+            </NavButton>
+            <NavButton id="payments" icon={CreditCard} onClick={() => setTab('payments')}> Payments
+            </NavButton>
+          </nav>
+        </div>
+
+        {/* Understand */}
+        <div className="dash-section">
+          <div className="dash-section-label">Understand</div>
+          <nav className="dash-nav">
+            <NavButton id="summary" icon={Sparkles} onClick={() => setTab('summary')}> Summary
+            </NavButton>
+            <NavButton id="analytics" icon={BarChart3} onClick={() => setTab('analytics')}> Analytics
+            </NavButton>
+          </nav>
+        </div>
+
+        <button className="logout-btn nav-btn-icon" onClick={onLogout}>
+          <LogOut size={18} className="nav-ico" />
+          <span> Logout</span>
+        </button>
       </aside>
 
       <main className="dash-main">
@@ -79,42 +133,37 @@ export default function Dashboard({ username, onLogout }) {
             username={username}
             onNavigate={(next, payload) => {
               if (next === 'addExpense') return goAddExpense(payload || null)
-              setTab(next) // supports 'groups' | 'analytics' | 'upload'
+              setTab(next)
             }}
           />
         )}
 
-        {tab === 'groups' && (
-          <Groups username={username} onOpen={goAddExpense} />
-        )}
+        {tab === 'groups' && <Groups username={username} onOpen={goAddExpense} />}
 
         {tab === 'addExpense' && (
           <GroupDetails
-            key={selectedGroup?.id || 'add-expense-new'}  // force clean mount
+            key={selectedGroup?.id || 'add-expense-new'}
             username={username}
-            group={selectedGroup}                         // may be null; see guard below
+            group={selectedGroup}
             onPickGroup={goAddExpense}
             titleOverride="Add Expenses"
           />
         )}
 
         {tab === 'payments' && <Payments username={username} />}
-
+        {tab === 'summary' && <Summarization username={username} />}
+        {tab === 'settlements' && <SettlementSuggestions username={username} />}
         {tab === 'analytics' && <Analytics username={username} />}
 
         {tab === 'upload' && (
           <div className="page">
             <div className="page-header"><h1 className="title">Upload Receipt</h1></div>
             <div className="panel" style={{ maxWidth: 520 }}>
-              <ReceiptUpload
-                onExtractData={handleExtracted}
-                onClose={()=>setTab('home')}
-              />
+              <ReceiptUpload onExtractData={handleExtracted} onClose={() => setTab('home')} />
             </div>
           </div>
         )}
 
-        {/* AI Chatbot - Always visible as floating button */}
         <FinancialChatbot
           username={username}
           groups={groups}
