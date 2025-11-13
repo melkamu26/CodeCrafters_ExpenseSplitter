@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -14,6 +17,15 @@ import re
 
 app = Flask(__name__)
 CORS(app)
+
+
+# ----------------------- Helpers -----------------------
+def _safe_float(v, default=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return float(default)
+#----------------------- Google Vision Client -----------------------
 
 # Initialize Vision client
 def get_vision_client():
@@ -765,6 +777,230 @@ def payment_history():
         return jsonify(payments), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
+
+# ----------------------- Settlement Suggestions -----------------------
+@app.route("/api/settlements/suggest", methods=["GET"])
+def settlements_suggest():
+    """
+    If groupId is provided -> return minimal cash transfers for that group.
+    Else if user is provided -> return suggestions per group the user belongs to.
+    """
+    gid = (request.args.get("groupId") or "").strip()
+    user = (request.args.get("user") or "").strip()
+
+    if not gid and not user:
+        return jsonify({"error": "Provide groupId or user"}), 400
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        def balances_for_group(group_id):
+            # Build balances dict: positive means the person should RECEIVE, negative means they OWE.
+            bal = {}
+
+            # Who paid how much total in the group
+            cur.execute("SELECT e.paid_by, COALESCE(SUM(e.amount),0) FROM expenses e WHERE e.group_id = %s GROUP BY e.paid_by", (group_id,))
+            for payer, total_paid in cur.fetchall():
+                bal[payer] = bal.get(payer, 0.0) + _safe_float(total_paid)
+
+            # How much each user owes (expense_split rows)
+            cur.execute(
+                """
+                SELECT es.username, COALESCE(SUM(es.split_amount),0)
+                FROM expense_split es
+                JOIN expenses e ON es.expense_id = e.id
+                WHERE e.group_id = %s
+                GROUP BY es.username
+                """,
+                (group_id,),
+            )
+            for uname, owed in cur.fetchall():
+                bal[uname] = bal.get(uname, 0.0) - _safe_float(owed)
+
+            # Greedy settle: payers positive, debtors negative
+            creditors = [{"name": n, "amt": round(v, 2)} for n, v in bal.items() if v > 0.005]
+            debtors = [{"name": n, "amt": round(-v, 2)} for n, v in bal.items() if v < -0.005]
+            creditors.sort(key=lambda x: -x["amt"])
+            debtors.sort(key=lambda x: -x["amt"])
+
+            transfers = []
+            i, j = 0, 0
+            while i < len(debtors) and j < len(creditors):
+                pay = min(debtors[i]["amt"], creditors[j]["amt"])
+                if pay > 0:
+                    transfers.append({"from": debtors[i]["name"], "to": creditors[j]["name"], "amount": round(pay, 2)})
+                    debtors[i]["amt"] -= pay
+                    creditors[j]["amt"] -= pay
+                if debtors[i]["amt"] <= 0.005:
+                    i += 1
+                if creditors[j]["amt"] <= 0.005:
+                    j += 1
+
+            group_name = None
+            cur.execute("SELECT name FROM `groups` WHERE id = %s", (group_id,))
+            row = cur.fetchone()
+            if row:
+                group_name = row[0]
+
+            return {"groupId": group_id, "groupName": group_name, "transfers": transfers}
+
+        if gid:
+            result = balances_for_group(gid)
+            cur.close()
+            conn.close()
+            return jsonify(result), 200
+
+        # user view: all groups the user belongs to
+        cur.execute("SELECT g.id FROM `groups` g JOIN group_members gm ON g.id = gm.group_id WHERE gm.username = %s", (user,))
+        group_ids = [r[0] for r in cur.fetchall()]
+        results = [balances_for_group(gx) for gx in group_ids]
+        cur.close()
+        conn.close()
+        return jsonify(results), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ----------------------- Summary (overview + AI) -----------------------
+import os, json, requests
+
+# ===== Summary helpers =====
+def _summary_data_for_user(user):
+    conn = get_connection(); cur = conn.cursor()
+    # totals
+    cur.execute("""
+        SELECT COALESCE(SUM(e.amount),0)
+        FROM expenses e
+        JOIN `groups` g ON g.id = e.group_id
+        JOIN group_members gm ON gm.group_id = g.id
+        WHERE gm.username = %s
+    """, (user,))
+    total = float(cur.fetchone()[0] or 0)
+
+    # by group
+    cur.execute("""
+        SELECT g.name, COALESCE(SUM(e.amount),0) AS total
+        FROM expenses e
+        JOIN `groups` g ON g.id = e.group_id
+        JOIN group_members gm ON gm.group_id = g.id
+        WHERE gm.username = %s
+        GROUP BY g.name
+        ORDER BY total DESC
+    """, (user,))
+    by_group = [{'group': r[0], 'total': float(r[1])} for r in cur.fetchall()]
+
+    # recent 10
+    cur.execute("""
+        SELECT e.category, e.amount, e.date, g.name
+        FROM expenses e
+        JOIN `groups` g ON g.id = e.group_id
+        JOIN group_members gm ON gm.group_id = g.id
+        WHERE gm.username = %s
+        ORDER BY e.date DESC, e.time DESC
+        LIMIT 10
+    """, (user,))
+    recent = [{'title': r[0], 'amount': float(r[1]), 'date': str(r[2]), 'group': r[3]} for r in cur.fetchall()]
+
+    cur.close(); conn.close()
+
+    quick = {}
+    if recent:
+        avg = sum(x['amount'] for x in recent) / len(recent)
+        quick = {
+            'countRecent': len(recent),
+            'avgRecent': round(avg, 2),
+            'topGroup': by_group[0]['group'] if by_group else None
+        }
+
+    return {
+        'total': total,
+        'byGroup': by_group,
+        'recent': recent,
+        'quick': quick
+    }
+
+@app.route('/api/summary', methods=['GET'])
+def summary_plain():
+    user = (request.args.get('user') or '').strip()
+    if not user:
+        return jsonify({'error': 'Username required'}), 400
+    try:
+        data = _summary_data_for_user(user)
+        return jsonify(data), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/summary/ai', methods=['GET'])
+def summary_ai():
+    user = (request.args.get('user') or '').strip()
+    if not user:
+        return jsonify({'error': 'Username required'}), 400
+
+    try:
+        ctx = _summary_data_for_user(user)
+    except Exception as e:
+        return jsonify({'error': f'Failed to load summary data: {e}'}), 500
+
+    # If there is no data, return a friendly message
+    if ctx.get('total', 0) <= 0 and not ctx.get('recent'):
+        return jsonify({'text': 'No expenses yet. Add a few and I will summarize trends for you.'}), 200
+
+    # Build a compact textual context for the LLM
+    try:
+        by_group_str = ", ".join(f"{g['group']}: ${g['total']:.2f}" for g in ctx.get('byGroup', [])[:5]) or "none"
+        recent_lines = []
+        for r in ctx.get('recent', [])[:10]:
+            recent_lines.append(f"{r['date']} • ${r['amount']:.2f} • {r['title']} • {r['group']}")
+        recent_str = "\n".join(recent_lines) or "none"
+        quick = ctx.get('quick', {})
+        quick_str = f"countRecent={quick.get('countRecent', 0)}, avgRecent=${quick.get('avgRecent', 0):.2f}, topGroup={quick.get('topGroup')}"
+        plain_context = (
+            f"User: {user}\n"
+            f"Total spending: ${ctx.get('total', 0):.2f}\n"
+            f"By group: {by_group_str}\n"
+            f"Quick: {quick_str}\n"
+            f"Recent:\n{recent_str}\n"
+        )
+    except Exception as e:
+        return jsonify({'error': f'Failed to build AI context: {e}'}), 500
+
+    api_key = os.getenv('OPENAI_API_KEY', '').strip()
+    if not api_key:
+        return jsonify({'error': 'OPENAI_API_KEY not set on server'}), 500
+
+    # Call OpenAI chat completions with defensive error handling
+    try:
+        url = 'https://api.openai.com/v1/chat/completions'
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+        body = {
+            'model': 'gpt-4o-mini',
+            'messages': [
+                {'role': 'system', 'content': 'You are a concise financial analyst for a bill-splitting app. Output 3 to 6 short bullets. Use simple language. No emojis.'},
+                {'role': 'user', 'content': f"Summarize this user's spending and give quick suggestions.\n\nContext:\n{plain_context}"}
+            ],
+            'temperature': 0.4,
+            'max_tokens': 250
+        }
+        resp = requests.post(url, headers=headers, json=body, timeout=30)
+        if resp.status_code != 200:
+            # return the error so the UI can show it
+            return jsonify({'error': f'OpenAI error {resp.status_code}', 'details': resp.text[:500]}), 502
+        data = resp.json()
+        text = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+        if not text:
+            return jsonify({'error': 'OpenAI returned empty content'}), 502
+        return jsonify({'text': text}), 200
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'OpenAI request failed: {e}'}), 502
+    except Exception as e:
+        return jsonify({'error': f'Unexpected AI error: {e}'}), 500
+
+
 
     # ==================== HEALTH CHECK ====================
 
